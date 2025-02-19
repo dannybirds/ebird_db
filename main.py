@@ -1,4 +1,5 @@
 import csv
+import json
 import os
 from typing import Any, Generator, LiteralString, OrderedDict
 import psycopg
@@ -10,20 +11,18 @@ from tqdm import tqdm
 from psycopg.types.string import StrDumper
 
 DB_NAME = "ebird"
-
 TMP_SAMPLING_TABLE = "tmp_sampling_table"
 
 locality_columns: dict[LiteralString, LiteralString] = OrderedDict({
-        'locality_id': 'text',# primary key,
+        'locality_id': 'text',
         'name': 'text',
-        'type': 'text',# -- H for hidden, P for public
+        'type': 'text',
         'latitude': 'float',
         'longitude': 'float'
 })
 
 checklist_columns: dict[LiteralString, LiteralString] = OrderedDict({
-    'sampling_event_id': 'text',# primary key',
-    #'locality_id': 'text', # references localities(locality_id)',
+    'sampling_event_id': 'text',
     'last_edited_date': 'timestamptz',
     'country': 'text',
     'country_code': 'text',
@@ -51,26 +50,6 @@ checklist_columns: dict[LiteralString, LiteralString] = OrderedDict({
 })
 
 def create_tables(conn: psycopg.Connection):
-
-    create_species_table = """
-    CREATE TABLE IF NOT EXISTS species (
-        species_code            text primary key,
-        common_name             text,
-        scientific_name         text,
-        category                text, -- species, hybrid, etc
-        taxon_order             int,
-        banding_codes           text[],
-        common_name_codes       text[],
-        scientific_name_codes   text[],
-        order_name              text,
-        family_code             text,
-        family_common_name      text,
-        family_scientific_name  text,
-        taxon_concept_id        text,
-        exotic_code             text
-    )
-    """
-
     create_sightings_table = """
     CREATE TABLE IF NOT EXISTS sightings (
         global_unique_identifier    text primary key,
@@ -91,7 +70,6 @@ def create_tables(conn: psycopg.Connection):
     """
 
     with conn.cursor() as cur:
-        cur.execute(create_species_table)
         cur.execute(create_sightings_table)
         conn.commit()
 
@@ -162,71 +140,56 @@ def copy_sampling_file_to_temp_table(conn: psycopg.Connection, lines: Generator[
     print(f"Wrote {num} checklists to tmp_sampling_table.")
 
 
-def make_temp_sampling_table(ebird_file: str):
-    # Connect to the database.
-    conn = psycopg.connect(f"dbname={DB_NAME} user={os.getenv("POSTGRES_USER")} password={os.getenv("POSTGRES_PWD")}")
+def open_connection(autocommit: bool=False) -> psycopg.Connection:
+    conn = psycopg.connect(f"dbname={DB_NAME} user={os.getenv("POSTGRES_USER")} password={os.getenv("POSTGRES_PWD")}", autocommit=autocommit)
     conn.adapters.register_dumper(str, NullStrDumper)
-    
-    # Open the tar file and iterate over the lines in the sampling files.
-    tar = tarfile.open(ebird_file, "r")
-    # Copy the sampling file to a temp table.
-    sampling_file_lines = lines_from_tar_member_with_suffix(tar, '_sampling.txt.gz')
-    copy_sampling_file_to_temp_table(conn, sampling_file_lines)
-    # Close the tar file.
-    tar.close()
+    return conn
 
-    # Close the connection, re-open with autocommit, and vacuum.
-    conn.close()
-    conn = psycopg.connect(f"dbname={DB_NAME} user={os.getenv("POSTGRES_USER")} password={os.getenv("POSTGRES_PWD")}", autocommit=True)
-    conn.execute('VACUUM FULL')
-    conn.close()
+def vacuum():
+    with open_connection(autocommit=True) as conn:
+        conn.execute('VACUUM FULL')
+
+def make_temp_sampling_table(ebird_file: str):
+    with open_connection() as conn:
+        # Open the tar file and iterate over the lines in the sampling files.
+        with tarfile.open(ebird_file, "r") as tar:
+            # Copy the sampling file to a temp table.
+            sampling_file_lines = lines_from_tar_member_with_suffix(tar, '_sampling.txt.gz')
+            copy_sampling_file_to_temp_table(conn, sampling_file_lines)
+    # Clean up after inserting so many rows.
+    vacuum()
 
 def create_and_fill_locality_table():
-    # Connect to the database.
-    conn = psycopg.connect(f"dbname={DB_NAME} user={os.getenv("POSTGRES_USER")} password={os.getenv("POSTGRES_PWD")}")
-    conn.adapters.register_dumper(str, NullStrDumper)
-
     col_dict = locality_columns.copy()
     col_dict['locality_id'] = 'text primary key'
 
     columns = ", ".join([f'{name} {type}' for name, type in col_dict.items()])
-    qs = f"CREATE TABLE IF NOT EXISTS localities ({columns});"
-
-    print(qs)
-    conn.execute(qs)
-    conn.commit()
-
+    create_q = f"CREATE TABLE IF NOT EXISTS localities ({columns});"
+    print("Create localities table query:")
+    print(create_q)
+    
     insert_q = """
     INSERT INTO localities (locality_id, name, type, latitude, longitude) 
     SELECT DISTINCT ON (locality_id) locality_id, name, type, latitude, longitude
     FROM tmp_sampling_table;
     """
-
+    print("Fill localities table query:")
     print(insert_q)
-    conn.execute(insert_q)
-    conn.commit()
 
-    # Close the connection, re-open with autocommit, and vacuum.
-    conn.close()
-    conn = psycopg.connect(f"dbname={DB_NAME} user={os.getenv("POSTGRES_USER")} password={os.getenv("POSTGRES_PWD")}", autocommit=True)
-    conn.execute('VACUUM localities')
-    conn.close()
+    with open_connection() as conn:
+        conn.execute(create_q)
+        conn.commit()
+        conn.execute(insert_q)
+        conn.commit()
+    vacuum()
 
 def create_and_fill_checklist_table():
-    # Connect to the database.
-    conn = psycopg.connect(f"dbname={DB_NAME} user={os.getenv("POSTGRES_USER")} password={os.getenv("POSTGRES_PWD")}")
-    conn.adapters.register_dumper(str, NullStrDumper)
-
     col_dict = checklist_columns.copy()
     col_dict['sampling_event_id'] = 'text primary key'
     col_dict['locality_id'] = 'text references localities(locality_id)'
 
     columns = ", ".join([f'{name} {type}' for name, type in col_dict.items()])
-    qs = f"CREATE TABLE IF NOT EXISTS checklists ({columns});"
-
-    print(qs)
-    conn.execute(qs)
-    conn.commit()
+    create_q = f"CREATE TABLE IF NOT EXISTS checklists ({columns});"
 
     insert_q = """
     INSERT INTO checklists (
@@ -287,16 +250,103 @@ def create_and_fill_checklist_table():
     FROM tmp_sampling_table;
     """
 
+    print("Create checklists table query:")
+    print(create_q)
+    print("Fill checklists table query:")
     print(insert_q)
-    conn.execute(insert_q)
-    conn.commit()
 
-    # Close the connection, re-open with autocommit, and vacuum.
-    conn.close()
-    conn = psycopg.connect(f"dbname={DB_NAME} user={os.getenv("POSTGRES_USER")} password={os.getenv("POSTGRES_PWD")}", autocommit=True)
-    conn.execute('VACUUM localities')
-    conn.close()
+    with open_connection() as conn:
+        conn.execute(create_q)
+        conn.commit()
+        conn.execute(insert_q)
+        conn.commit()
+    vacuum()
 
+
+def create_and_fill_species_table():
+    import urllib.request
+    api_key = os.environ.get("EBIRD_API_KEY")
+    if api_key is None:
+        raise Exception("EBIRD_API_KEY environment variable not set")
+    req = urllib.request.Request("https://api.ebird.org/v2/ref/taxonomy/ebird?fmt=json", headers={"X-eBirdApiToken": api_key})
+    species_json = []
+    with urllib.request.urlopen(req) as response:
+        if response.status == 200:
+            species_json = json.loads(response.read().decode())
+        else:
+            raise Exception(f"Error: {response.status}")
+        
+    # Fill in any missing keys.
+    for species in species_json:
+        #if 'bandingCodes' not in species:
+        #    species['bandingCodes'] = []
+        #if 'comNameCodes' not in species:
+        #    species['comNameCodes'] = []
+        #if 'sciNameCodes' not in species:
+        #    species['sciNameCodes'] = []
+        if 'order' not in species:
+            species['order'] = None
+        if 'familyCode' not in species:
+            species['familyCode'] = None
+        if 'familyComName' not in species:
+            species['familyComName'] = None
+        if 'familySciName' not in species:
+            species['familySciName'] = None
+    
+    # We've got the species data, so create the table.
+    create_species_table_q = """
+    CREATE TABLE IF NOT EXISTS species (
+        species_code            text primary key,
+        common_name             text,
+        scientific_name         text,
+        category                text, -- species, hybrid, etc
+        taxon_order             int,
+        banding_codes           text[],
+        common_name_codes       text[],
+        scientific_name_codes   text[],
+        order_name              text,
+        family_code             text,
+        family_common_name      text,
+        family_scientific_name  text
+    )
+    """
+    with open_connection() as conn:
+        conn.execute(create_species_table_q)
+        conn.commit()
+        with conn.cursor() as cur:
+            cur.executemany("""
+                        INSERT INTO species (
+                        species_code,
+                        common_name,
+                        scientific_name,
+                        category,
+                        taxon_order,
+                        banding_codes,
+                        common_name_codes,
+                        scientific_name_codes,
+                        order_name,
+                        family_code,
+                        family_common_name,
+                        family_scientific_name
+                        )
+                        VALUES (
+                        %(speciesCode)s,
+                        %(comName)s,
+                        %(sciName)s,
+                        %(category)s,
+                        %(taxonOrder)s,
+                        %(bandingCodes)s,
+                        %(comNameCodes)s,
+                        %(sciNameCodes)s,
+                        %(order)s,
+                        %(familyCode)s,
+                        %(familyComName)s,
+                        %(familySciName)s
+                        )
+            """,
+            species_json)
+            cur.connection.commit()
+    vacuum()
 
 
 def main():
@@ -304,18 +354,21 @@ def main():
     parser.add_argument("--ebird_file", type=str, help="The tar file containing eBird data")
     args = parser.parse_args()
 
-    # First, read the sampling data to a temp table.
-    make_temp_sampling_table(args.ebird_file)
-    # Then copy the sampling data to the localities and checklists tables.
-    create_and_fill_locality_table()
-    create_and_fill_checklist_table()
-    # And delete the temp table.
-    conn = psycopg.connect(f"dbname={DB_NAME} user={os.getenv("POSTGRES_USER")} password={os.getenv("POSTGRES_PWD")}", autocommit=True)
-    conn.execute(f'DROP TABLE {TMP_SAMPLING_TABLE}')
-    conn.execute('VACUUM FULL')
-    conn.close()
+    if (False):
+        # First, read the sampling data to a temp table.
+        make_temp_sampling_table(args.ebird_file)
+        # Then copy the sampling data to the localities and checklists tables.
+        create_and_fill_locality_table()
+        create_and_fill_checklist_table()
+        # And delete the temp table and vacuum.
+        conn = psycopg.connect(f"dbname={DB_NAME} user={os.getenv("POSTGRES_USER")} password={os.getenv("POSTGRES_PWD")}", autocommit=True)
+        conn.execute(f'DROP TABLE {TMP_SAMPLING_TABLE}')
+        conn.execute('VACUUM FULL')
+        conn.close()
 
-    
+    # Second, make the species table.
+    create_and_fill_species_table()
+
 
 if __name__ == "__main__":
     main()
