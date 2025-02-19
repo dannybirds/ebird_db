@@ -1,6 +1,6 @@
 import csv
 import os
-from typing import Any, Generator
+from typing import Any, Generator, LiteralString, OrderedDict
 import psycopg
 import tarfile
 import gzip
@@ -11,47 +11,46 @@ from psycopg.types.string import StrDumper
 
 DB_NAME = "ebird"
 
+TMP_SAMPLING_TABLE = "tmp_sampling_table"
+
+locality_columns: dict[LiteralString, LiteralString] = OrderedDict({
+        'locality_id': 'text',# primary key,
+        'name': 'text',
+        'type': 'text',# -- H for hidden, P for public
+        'latitude': 'float',
+        'longitude': 'float'
+})
+
+checklist_columns: dict[LiteralString, LiteralString] = OrderedDict({
+    'sampling_event_id': 'text',# primary key',
+    #'locality_id': 'text', # references localities(locality_id)',
+    'last_edited_date': 'timestamptz',
+    'country': 'text',
+    'country_code': 'text',
+    'state': 'text',
+    'state_code': 'text',
+    'county': 'text',
+    'county_code': 'text',
+    'iba_code': 'text',  # important bird area
+    'bcr_code': 'text',  # bird conservation region
+    'usfws_code': 'text',  # US fish and wildlife service
+    'atlas_block': 'text',
+    'observation_date': 'date',
+    'time_started': 'time',
+    'observer_id': 'text',
+    'protocol_type': 'text',  # incidental, stationary, traveling
+    'protocol_code': 'text',
+    'project_code': 'text',  # ebird, atlas, etc
+    'duration_minutes': 'int',
+    'effort_distance_km': 'float',
+    'effort_area_ha': 'float',
+    'number_observers': 'int',
+    'all_species_reported': 'bool',
+    'group_identifier': 'text',
+    'trip_comments': 'text'
+})
+
 def create_tables(conn: psycopg.Connection):
-
-    create_localities_table = """
-    CREATE TABLE IF NOT EXISTS localities (
-        locality_id     text primary key,
-        name            text,
-        type            text, -- H for hidden, P for public
-        lat_lng         geography(Point, 4326)
-    )
-    """
-
-    create_checklists_table = """
-    CREATE TABLE IF NOT EXISTS checklists (
-        sampling_event_id       text primary key,
-        locality_id             text references localities(locality_id),
-        last_edited_date        timestamptz,
-        country                 text,
-        country_code            text,
-        state                   text,
-        state_code              text,
-        county                  text,
-        county_code             text,
-        iba_code                text, -- important bird area
-        bcr_code                text, -- bird conservation region
-        usfws_code              text, -- US fish and wildlife service
-        atlas_block             text,
-        observation_date        date,
-        time_started            time,
-        observer_id             text,
-        protocol_type           text, -- incidental, stationary, traveling
-        protocol_code           text,
-        project_code            text, -- ebird, atlas, etc
-        duration_minutes        int,
-        effort_distance_km      float,
-        effort_area_ha          float,
-        number_observers        int,
-        all_species_reported    bool,
-        group_identifier        text,
-        trip_comments           text
-    )
-    """
 
     create_species_table = """
     CREATE TABLE IF NOT EXISTS species (
@@ -92,68 +91,8 @@ def create_tables(conn: psycopg.Connection):
     """
 
     with conn.cursor() as cur:
-        cur.execute(create_localities_table)
         cur.execute(create_species_table)
-        cur.execute(create_checklists_table)
         cur.execute(create_sightings_table)
-        conn.commit()
-
-
-def fmt_value(line: dict[str, Any], key: str, add_quotes: bool=True) -> str:
-    v = line.get(key) or None
-    if not v:
-        return 'NULL'
-    if add_quotes:
-        return f"'{v.replace("'", "''")}'"
-    else:
-        return v
-
-
-
-def insert_checklist(conn: psycopg.Connection, checklist_line: dict[str, Any]) -> None:
-
-    insert_locality_query = """
-    INSERT INTO localities (locality_id, name, type, lat_lng)
-    VALUES (%(LOCALITY ID)s, %(LOCALITY)s, %(LOCALITY TYPE)s, ST_SetSRID(ST_MakePoint(%(LATITUDE)s::float, %(LONGITUDE)s::float), 4326))
-    ON CONFLICT (locality_id) DO NOTHING
-    """
-
-    insert_checklist_query = """
-    INSERT INTO checklists (sampling_event_id, locality_id, last_edited_date, country, country_code, state, state_code, county, county_code, iba_code, bcr_code, usfws_code, atlas_block, observation_date, time_started, observer_id, protocol_type, protocol_code, project_code, duration_minutes, effort_distance_km, effort_area_ha, number_observers, all_species_reported, group_identifier, trip_comments)
-    VALUES (
-        %(SAMPLING EVENT IDENTIFIER)s,
-        %(LOCALITY ID)s,
-        %(LAST EDITED DATE)s::timestamptz,
-        %(country)s,
-        %(COUNTRY CODE)s,
-        %(STATE)s,
-        %(STATE CODE)s,
-        %(COUNTY)s,
-        %(COUNTY CODE)s,
-        %(IBA CODE)s,
-        %(BCR CODE)s,
-        %(USFWS CODE)s,
-        %(ATLAS BLOCK)s,
-        %(OBSERVATION DATE)s::date,
-        %(TIME OBSERVATIONS STARTED)s::time,
-        %(OBSERVER ID)s,
-        %(PROTOCOL TYPE)s,
-        %(PROTOCOL CODE)s,
-        %(PROJECT CODE)s,
-        %(DURATION MINUTES)s::int,
-        %(EFFORT DISTANCE KM)s::float,
-        %(EFFORT AREA HA)s::float,
-        %(NUMBER OBSERVERS)s::int,
-        %(ALL SPECIES REPORTED)s::bool,
-        %(GROUP IDENTIFIER)s,
-        %(TRIP COMMENTS)s
-    )
-    ON CONFLICT (sampling_event_id) DO NOTHING
-    """
-
-    with conn.cursor() as cur:
-        cur.execute(insert_locality_query, checklist_line)
-        cur.execute(insert_checklist_query, checklist_line)
         conn.commit()
 
 
@@ -164,22 +103,200 @@ def lines_from_tar_member_with_suffix(tar: tarfile.TarFile, suffix: str) -> Gene
             if f is not None:
                 yield from csv.DictReader(io.TextIOWrapper(gzip.GzipFile(fileobj=f)), delimiter='\t')
 
-
 class NullStrDumper(StrDumper):
     def dump(self, obj: str):
         if not obj or obj.isspace():
             return None
         return super().dump(obj)
 
-def copy_localities(conn: psycopg.Connection, lines: Generator[dict[str, Any]]) -> None:
+def copy_sampling_file_to_temp_table(conn: psycopg.Connection, lines: Generator[dict[str, Any]]) -> None:
+    columns = ", ".join([f'{name} {type}' for name, type in locality_columns.items()])
+    columns += ", "
+    columns += ", ".join([f'{name} {type}' for name, type in checklist_columns.items()])
+    qs = f"CREATE TABLE IF NOT EXISTS {TMP_SAMPLING_TABLE} ({columns});"
+
+    print(qs)
+    conn.execute(qs)
+    conn.commit()
+    copy_cmd = f"COPY {TMP_SAMPLING_TABLE} (locality_id, name, type, latitude, longitude, sampling_event_id, last_edited_date, country, country_code, state, state_code, county, county_code, iba_code, bcr_code, usfws_code, atlas_block, observation_date, time_started, observer_id, protocol_type, protocol_code, project_code, duration_minutes, effort_distance_km, effort_area_ha, number_observers, all_species_reported, group_identifier, trip_comments) FROM STDIN"
     with conn.cursor() as cur:
-        with cur.copy("COPY localities (locality_id, name, type) FROM STDIN") as copy:
+        with cur.copy(copy_cmd) as copy:
             num: int = 0;
             for line in tqdm(lines):
-                #p = f"POINT({line['LATITUDE']}, {line['LONGITUDE']})"
-                copy.write_row( (line['LOCALITY ID'], line['LOCALITY'], line['LOCALITY TYPE']))
+                copy.write_row((
+                    line['LOCALITY ID'],
+                    line['LOCALITY'],
+                    line['LOCALITY TYPE'],
+                    line['LATITUDE'],
+                    line['LONGITUDE'],
+                    line['SAMPLING EVENT IDENTIFIER'],
+                    line['LAST EDITED DATE'],
+                    line['country'],
+                    line['COUNTRY CODE'],
+                    line['STATE'],
+                    line['STATE CODE'],
+                    line['COUNTY'],
+                    line['COUNTY CODE'],
+                    line['IBA CODE'],
+                    line['BCR CODE'],
+                    line['USFWS CODE'],
+                    line['ATLAS BLOCK'],
+                    line['OBSERVATION DATE'],
+                    line['TIME OBSERVATIONS STARTED'],
+                    line['OBSERVER ID'],
+                    line['PROTOCOL TYPE'],
+                    line['PROTOCOL CODE'],
+                    line['PROJECT CODE'],
+                    line['DURATION MINUTES'],
+                    line['EFFORT DISTANCE KM'],
+                    line['EFFORT AREA HA'],
+                    line['NUMBER OBSERVERS'],
+                    line['ALL SPECIES REPORTED'],
+                    line['GROUP IDENTIFIER'],
+                    line['TRIP COMMENTS']
+                ))
                 num += 1
-    print(f"Wrote {num} localities.")
+                if num > 100000:
+                    break
+        conn.commit()
+    print(f"Wrote {num} checklists to tmp_sampling_table.")
+
+
+def make_temp_sampling_table(ebird_file: str):
+    # Connect to the database.
+    conn = psycopg.connect(f"dbname={DB_NAME} user={os.getenv("POSTGRES_USER")} password={os.getenv("POSTGRES_PWD")}")
+    conn.adapters.register_dumper(str, NullStrDumper)
+    
+    # Open the tar file and iterate over the lines in the sampling files.
+    tar = tarfile.open(ebird_file, "r")
+    # Copy the sampling file to a temp table.
+    sampling_file_lines = lines_from_tar_member_with_suffix(tar, '_sampling.txt.gz')
+    copy_sampling_file_to_temp_table(conn, sampling_file_lines)
+    # Close the tar file.
+    tar.close()
+
+    # Close the connection, re-open with autocommit, and vacuum.
+    conn.close()
+    conn = psycopg.connect(f"dbname={DB_NAME} user={os.getenv("POSTGRES_USER")} password={os.getenv("POSTGRES_PWD")}", autocommit=True)
+    conn.execute('VACUUM FULL')
+    conn.close()
+
+def create_and_fill_locality_table():
+    # Connect to the database.
+    conn = psycopg.connect(f"dbname={DB_NAME} user={os.getenv("POSTGRES_USER")} password={os.getenv("POSTGRES_PWD")}")
+    conn.adapters.register_dumper(str, NullStrDumper)
+
+    col_dict = locality_columns.copy()
+    col_dict['locality_id'] = 'text primary key'
+
+    columns = ", ".join([f'{name} {type}' for name, type in col_dict.items()])
+    qs = f"CREATE TABLE IF NOT EXISTS localities ({columns});"
+
+    print(qs)
+    conn.execute(qs)
+    conn.commit()
+
+    insert_q = """
+    INSERT INTO localities (locality_id, name, type, latitude, longitude) 
+    SELECT DISTINCT ON (locality_id) locality_id, name, type, latitude, longitude
+    FROM tmp_sampling_table;
+    """
+
+    print(insert_q)
+    conn.execute(insert_q)
+    conn.commit()
+
+    # Close the connection, re-open with autocommit, and vacuum.
+    conn.close()
+    conn = psycopg.connect(f"dbname={DB_NAME} user={os.getenv("POSTGRES_USER")} password={os.getenv("POSTGRES_PWD")}", autocommit=True)
+    conn.execute('VACUUM localities')
+    conn.close()
+
+def create_and_fill_checklist_table():
+    # Connect to the database.
+    conn = psycopg.connect(f"dbname={DB_NAME} user={os.getenv("POSTGRES_USER")} password={os.getenv("POSTGRES_PWD")}")
+    conn.adapters.register_dumper(str, NullStrDumper)
+
+    col_dict = checklist_columns.copy()
+    col_dict['sampling_event_id'] = 'text primary key'
+    col_dict['locality_id'] = 'text references localities(locality_id)'
+
+    columns = ", ".join([f'{name} {type}' for name, type in col_dict.items()])
+    qs = f"CREATE TABLE IF NOT EXISTS checklists ({columns});"
+
+    print(qs)
+    conn.execute(qs)
+    conn.commit()
+
+    insert_q = """
+    INSERT INTO checklists (
+        sampling_event_id,
+        last_edited_date,
+        country,
+        country_code,
+        state,
+        state_code,
+        county,
+        county_code,
+        iba_code,
+        bcr_code,
+        usfws_code,
+        atlas_block,
+        observation_date,
+        time_started,
+        observer_id,
+        protocol_type,
+        protocol_code,
+        project_code,
+        duration_minutes,
+        effort_distance_km,
+        effort_area_ha,
+        number_observers,
+        all_species_reported,
+        group_identifier,
+        trip_comments,
+        locality_id
+    )
+    SELECT
+        sampling_event_id,
+        last_edited_date,
+        country,
+        country_code,
+        state,
+        state_code,
+        county,
+        county_code,
+        iba_code,
+        bcr_code,
+        usfws_code,
+        atlas_block,
+        observation_date,
+        time_started,
+        observer_id,
+        protocol_type,
+        protocol_code,
+        project_code,
+        duration_minutes,
+        effort_distance_km,
+        effort_area_ha,
+        number_observers,
+        all_species_reported,
+        group_identifier,
+        trip_comments,
+        locality_id
+    FROM tmp_sampling_table;
+    """
+
+    print(insert_q)
+    conn.execute(insert_q)
+    conn.commit()
+
+    # Close the connection, re-open with autocommit, and vacuum.
+    conn.close()
+    conn = psycopg.connect(f"dbname={DB_NAME} user={os.getenv("POSTGRES_USER")} password={os.getenv("POSTGRES_PWD")}", autocommit=True)
+    conn.execute('VACUUM localities')
+    conn.close()
+
 
 
 def main():
@@ -187,29 +304,18 @@ def main():
     parser.add_argument("--ebird_file", type=str, help="The tar file containing eBird data")
     args = parser.parse_args()
 
-    # Connect to the database.
-    conn = psycopg.connect(f"dbname={DB_NAME} user={os.getenv("POSTGRES_USER")} password={os.getenv("POSTGRES_PWD")}")
-    conn.adapters.register_dumper(str, NullStrDumper)
-
-    # First, create the tables if they don't already exist.
-    create_tables(conn)
-    
-    # Open the tar file and iterate over the lines in the sampling files.
-    tar = tarfile.open(args.ebird_file, "r")
-    sampling_file_lines = lines_from_tar_member_with_suffix(tar, '_sampling.txt.gz')
-    copy_localities(conn, sampling_file_lines)
-    # num_checklists_inserted: int = 0
-    # for line in tqdm(sampling_file_lines):
-    #     insert_checklist(conn, line)
-    #     num_checklists_inserted += 1
-    #     if num_checklists_inserted % 100000 == 0:
-    #         print('.')
-    
-    # Close the tar file.
-    tar.close()
-    # Close the database connection.
+    # First, read the sampling data to a temp table.
+    make_temp_sampling_table(args.ebird_file)
+    # Then copy the sampling data to the localities and checklists tables.
+    create_and_fill_locality_table()
+    create_and_fill_checklist_table()
+    # And delete the temp table.
+    conn = psycopg.connect(f"dbname={DB_NAME} user={os.getenv("POSTGRES_USER")} password={os.getenv("POSTGRES_PWD")}", autocommit=True)
+    conn.execute(f'DROP TABLE {TMP_SAMPLING_TABLE}')
+    conn.execute('VACUUM FULL')
     conn.close()
 
+    
 
 if __name__ == "__main__":
     main()
