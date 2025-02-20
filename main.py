@@ -355,7 +355,13 @@ def create_observations_table():
 
 
 
-def copy_observations_to_observations_table(conn: psycopg.Connection, tar_member_reader: TarMemberReader, species_code_map: dict[str,str], year: datetime|None=None) -> None:
+def copy_observations_to_observations_table(
+        conn: psycopg.Connection,
+        tar_member_reader: TarMemberReader,
+        species_code_map: dict[str,str],
+        start_date: datetime|None=None,
+        end_date: datetime|None=None
+    ) -> None:
     if (tar_member_reader.member_file is None):
         raise ValueError("No member file found in tar member reader")
     copy_cmd = f"COPY observations (global_unique_identifier, sampling_event_id, species_code, sub_species_code, exotic_code, observation_count, breeding_code, breeding_category, behavior_code, age_sex_code, species_comments, has_media, approved, reviewed, reason) FROM STDIN"
@@ -370,9 +376,13 @@ def copy_observations_to_observations_table(conn: psycopg.Connection, tar_member
             skipped_pbar = tqdm(desc='observations skipped')
             for line in tqdm(tar_member_reader.lines(), desc='lines read'):
                 bytes_pbar.update(tar_member_reader.last_bytes_read)
-                if (year and line['OBSERVATION DATE']):
+                if ((start_date or end_date) and line['OBSERVATION DATE']):
                     obs_date = datetime.strptime(line['OBSERVATION DATE'], '%Y-%m-%d')
-                    if obs_date.year != year.year:
+                    if start_date and obs_date < start_date:
+                        num_skipped += 1
+                        skipped_pbar.update(1)
+                        continue
+                    if end_date and obs_date > end_date:
                         num_skipped += 1
                         skipped_pbar.update(1)
                         continue
@@ -406,7 +416,7 @@ def copy_observations_to_observations_table(conn: psycopg.Connection, tar_member
         conn.commit()
     pprint.pp(f"Wrote {num_added} observations to observations table, skipped {num_skipped}.")
 
-def create_and_fill_observations_table(ebird_file: str, year: datetime|None=None):
+def create_and_fill_observations_table(ebird_file: str, start_date: datetime|None=None, end_date: datetime|None=None):
     # Make a map from scientific name to species code.
     species_code_map = make_species_code_map()
     # Create the table
@@ -416,7 +426,7 @@ def create_and_fill_observations_table(ebird_file: str, year: datetime|None=None
     with tarfile.open(ebird_file, "r") as tar:
         tar_member_reader = TarMemberReader(tar, suffix)
         with open_connection() as conn:
-            copy_observations_to_observations_table(conn, tar_member_reader, species_code_map, year)
+            copy_observations_to_observations_table(conn, tar_member_reader, species_code_map, start_date, end_date)
     # Clean up after inserting so many rows.
     vacuum('observations')
 
@@ -428,11 +438,13 @@ def main():
                         type=str,
                         help="Which stage of the process to run",
                         choices=["copy_sampling", "localities", "checklists", "drop_sampling", "species", "observations"])
-    parser.add_argument("--year", type=int, help="The year to process")
+    parser.add_argument("--start_date",
+                        type=lambda s: datetime.strptime(s, '%Y-%m-%d'),
+                        help="Only data after this date will be processed (format: YYYY-MM-DD)")
+    parser.add_argument("--end_date",
+                        type=lambda s: datetime.strptime(s, '%Y-%m-%d'),
+                        help="Only data before this date will be processed (format: YYYY-MM-DD)")
     args = parser.parse_args()
-
-    # Get the year to restrict to, if any.
-    year: datetime|None = datetime(args.year, 1, 1) if args.year else None
 
     # Read in raw sampling data.
     if (args.stage == "copy_sampling"):
@@ -455,7 +467,7 @@ def main():
 
     # Make the big table of all the observations.
     if (args.stage == "observations"):
-        create_and_fill_observations_table(args.ebird_file, year)
+        create_and_fill_observations_table(args.ebird_file, args.start_date, args.end_date)
 
 if __name__ == "__main__":
     main()
