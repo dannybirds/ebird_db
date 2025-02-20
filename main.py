@@ -134,8 +134,8 @@ def copy_sampling_file_to_temp_table(conn: psycopg.Connection, lines: Generator[
                     line['TRIP COMMENTS']
                 ))
                 num += 1
-                if num > 100000:
-                    break
+                #if num > 100000:
+                #    break
         conn.commit()
     print(f"Wrote {num} checklists to tmp_sampling_table.")
 
@@ -221,6 +221,7 @@ def create_and_fill_checklist_table():
         locality_id
     )
     SELECT
+        DISTINCT ON (sampling_event_id)
         sampling_event_id,
         last_edited_date,
         country,
@@ -278,12 +279,6 @@ def create_and_fill_species_table():
         
     # Fill in any missing keys.
     for species in species_json:
-        #if 'bandingCodes' not in species:
-        #    species['bandingCodes'] = []
-        #if 'comNameCodes' not in species:
-        #    species['comNameCodes'] = []
-        #if 'sciNameCodes' not in species:
-        #    species['sciNameCodes'] = []
         if 'order' not in species:
             species['order'] = None
         if 'familyCode' not in species:
@@ -343,6 +338,7 @@ def create_and_fill_species_table():
                         %(familyComName)s,
                         %(familySciName)s
                         )
+                        ON CONFLICT (species_code) DO NOTHING
             """,
             species_json)
             cur.connection.commit()
@@ -352,23 +348,35 @@ def create_and_fill_species_table():
 def main():
     parser = argparse.ArgumentParser(description="Process eBird data.")
     parser.add_argument("--ebird_file", type=str, help="The tar file containing eBird data")
+    parser.add_argument("--stage",
+                        type=str,
+                        help="Which stage of the process to run",
+                        choices=["copy_sampling", "localities", "checklists", "drop_sampling", "species", "observations"])
     args = parser.parse_args()
 
-    if (False):
-        # First, read the sampling data to a temp table.
+    # Read in raw sampling data.
+    if (args.stage == "copy_sampling"):
         make_temp_sampling_table(args.ebird_file)
-        # Then copy the sampling data to the localities and checklists tables.
+
+    # Then copy the sampling data to the localities and checklists tables.    
+    if (args.stage == "localities"):    
         create_and_fill_locality_table()
+    if (args.stage == "checklists"):
         create_and_fill_checklist_table()
+
+    if (args.stage == "drop_sampling"):    
         # And delete the temp table and vacuum.
-        conn = psycopg.connect(f"dbname={DB_NAME} user={os.getenv("POSTGRES_USER")} password={os.getenv("POSTGRES_PWD")}", autocommit=True)
-        conn.execute(f'DROP TABLE {TMP_SAMPLING_TABLE}')
-        conn.execute('VACUUM FULL')
-        conn.close()
+        with psycopg.connect(f"dbname={DB_NAME} user={os.getenv("POSTGRES_USER")} password={os.getenv("POSTGRES_PWD")}", autocommit=True) as conn:
+            conn.execute(f'DROP TABLE {TMP_SAMPLING_TABLE}')
+            conn.execute('VACUUM FULL')
 
-    # Second, make the species table.
-    create_and_fill_species_table()
+    # Make table for species.
+    if (args.stage == "species"):
+        create_and_fill_species_table()
 
+    # Make the big table of all the observations.
+    if (args.stage == "observations"):
+        pass
 
 if __name__ == "__main__":
     main()
