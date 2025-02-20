@@ -191,6 +191,7 @@ def create_and_fill_checklist_table():
     columns = ", ".join([f'{name} {type}' for name, type in col_dict.items()])
     create_q = f"CREATE TABLE IF NOT EXISTS checklists ({columns});"
 
+    # This would probable be faster by re-COPYing the data from the TAR file. Will maaaaaybe investigate later.
     insert_q = """
     INSERT INTO checklists (
         sampling_event_id,
