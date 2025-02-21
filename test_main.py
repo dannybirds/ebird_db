@@ -2,7 +2,7 @@ import tarfile
 import gzip
 import io
 import unittest
-from tar_member_reader import TarMemberReader
+from archive_readers import TarMemberReader
 from unittest.mock import patch, MagicMock
 from main import make_species_code_map
 

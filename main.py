@@ -4,15 +4,19 @@ import os
 from typing import LiteralString, OrderedDict
 import psycopg
 from psycopg.types.string import StrDumper
-import tarfile
 import argparse
 from tqdm import tqdm
 import pprint
 
-from tar_member_reader import TarMemberReader
+from archive_readers import ArchiveMemberReader, get_archive_member_reader, get_observations_file_archive_member_reader, get_sampling_file_archive_member_reader
 
 DB_NAME = "ebird"
 TMP_SAMPLING_TABLE = "tmp_sampling_table"
+LOCALITIES_TABLE = "localities"
+CHECKLISTS_TABLE = "checklists"
+SPECIES_TABLE = "species"
+OBSERVATIONS_TABLE = "observations"
+
 
 locality_columns: dict[LiteralString, LiteralString] = OrderedDict({
         'locality_id': 'text',
@@ -65,7 +69,7 @@ def vacuum(table: LiteralString):
     with open_connection(autocommit=True) as conn:
         conn.execute(f'VACUUM {table}')
 
-def copy_sampling_file_to_temp_table(conn: psycopg.Connection, reader: TarMemberReader) -> None:
+def copy_sampling_file_to_temp_table(conn: psycopg.Connection, reader: ArchiveMemberReader) -> None:
     columns = ", ".join([f'{name} {type}' for name, type in locality_columns.items()])
     columns += ", "
     columns += ", ".join([f'{name} {type}' for name, type in checklist_columns.items()])
@@ -77,12 +81,14 @@ def copy_sampling_file_to_temp_table(conn: psycopg.Connection, reader: TarMember
     copy_cmd = f"COPY {TMP_SAMPLING_TABLE} (locality_id, name, type, latitude, longitude, sampling_event_id, last_edited_date, country, country_code, state, state_code, county, county_code, iba_code, bcr_code, usfws_code, atlas_block, observation_date, time_started, observer_id, protocol_type, protocol_code, project_code, duration_minutes, effort_distance_km, effort_area_ha, number_observers, all_species_reported, group_identifier, trip_comments) FROM STDIN"
     with conn.cursor() as cur:
         with cur.copy(copy_cmd) as copy:
-            pprint.pp(f"Copying observations from {reader.member_info.name} to observations table.")
-            pprint.pp(f"Total size is {reader.member_info.size} bytes.")
-            bytes_pbar = tqdm(desc='bytes read', unit='B', total=reader.member_info.size, unit_scale=True)
+            pprint.pp(f"Copying observations from {reader.file_name} to observations table.")
+            pprint.pp(f"Total size is {reader.file_size} bytes.")
+            bytes_pbar = tqdm(desc='bytes read', unit='B', total=reader.file_size, unit_scale=True)
             num_added: int = 0;
             added_pbar = tqdm(desc='checklists added')
             for line in tqdm(reader.lines(), desc='lines read'):
+                if 'COUNTRY' not in line:
+                    line['COUNTRY']= line['country']
                 bytes_pbar.update(reader.last_bytes_read)
                 copy.write_row((
                     line['LOCALITY ID'],
@@ -92,7 +98,7 @@ def copy_sampling_file_to_temp_table(conn: psycopg.Connection, reader: TarMember
                     line['LONGITUDE'],
                     line['SAMPLING EVENT IDENTIFIER'],
                     line['LAST EDITED DATE'],
-                    line['country'],
+                    line['COUNTRY'],
                     line['COUNTRY CODE'],
                     line['STATE'],
                     line['STATE CODE'],
@@ -118,8 +124,6 @@ def copy_sampling_file_to_temp_table(conn: psycopg.Connection, reader: TarMember
                 ))
                 num_added += 1
                 added_pbar.update(1)
-                #if num > 100000:
-                #    break
         conn.commit()
     pprint.pp(f"Wrote {num_added} checklists to tmp_sampling_table.")
 
@@ -128,9 +132,7 @@ def copy_sampling_file_to_temp_table(conn: psycopg.Connection, reader: TarMember
 def make_temp_sampling_table(ebird_file: str):
     with open_connection() as conn:
         # Open the tar file and iterate over the lines in the sampling files.
-        with tarfile.open(ebird_file, "r") as tar:
-            reader = TarMemberReader(tar, '_sampling.txt.gz')
-            # Copy the sampling file to a temp table.
+        with get_sampling_file_archive_member_reader(ebird_file) as reader:
             copy_sampling_file_to_temp_table(conn, reader)
     # Clean up after inserting so many rows.
     vacuum(TMP_SAMPLING_TABLE)
@@ -140,14 +142,15 @@ def create_and_fill_locality_table():
     col_dict['locality_id'] = 'text primary key'
 
     columns = ", ".join([f'{name} {type}' for name, type in col_dict.items()])
-    create_q = f"CREATE TABLE IF NOT EXISTS localities ({columns});"
+    create_q = f"CREATE TABLE IF NOT EXISTS {LOCALITIES_TABLE} ({columns});"
     print("Create localities table query:")
     print(create_q)
     
-    insert_q = """
-    INSERT INTO localities (locality_id, name, type, latitude, longitude) 
+    insert_q = f"""
+    INSERT INTO {LOCALITIES_TABLE} (locality_id, name, type, latitude, longitude) 
     SELECT DISTINCT ON (locality_id) locality_id, name, type, latitude, longitude
-    FROM tmp_sampling_table;
+    FROM tmp_sampling_table
+    ON CONFLICT (locality_id) DO NOTHING;
     """
     print("Fill localities table query:")
     print(insert_q)
@@ -157,19 +160,19 @@ def create_and_fill_locality_table():
         conn.commit()
         conn.execute(insert_q)
         conn.commit()
-    vacuum('localities')
+    vacuum(LOCALITIES_TABLE)
 
 def create_and_fill_checklist_table():
     col_dict = checklist_columns.copy()
     col_dict['sampling_event_id'] = 'text primary key'
-    col_dict['locality_id'] = 'text references localities(locality_id)'
+    col_dict['locality_id'] = f'text references {LOCALITIES_TABLE}(locality_id)'
 
     columns = ", ".join([f'{name} {type}' for name, type in col_dict.items()])
     create_q = f"CREATE TABLE IF NOT EXISTS checklists ({columns});"
 
     # This would probable be faster by re-COPYing the data from the TAR file. Will maaaaaybe investigate later.
-    insert_q = """
-    INSERT INTO checklists (
+    insert_q = f"""
+    INSERT INTO {CHECKLISTS_TABLE} (
         sampling_event_id,
         last_edited_date,
         country,
@@ -225,7 +228,8 @@ def create_and_fill_checklist_table():
         group_identifier,
         trip_comments,
         locality_id
-    FROM tmp_sampling_table;
+    FROM {TMP_SAMPLING_TABLE}
+    ON CONFLICT (sampling_event_id) DO NOTHING;
     """
 
     print("Create checklists table query:")
@@ -266,8 +270,8 @@ def create_and_fill_species_table():
             species['familySciName'] = None
     
     # We've got the species data, so create the table.
-    create_species_table_q = """
-    CREATE TABLE IF NOT EXISTS species (
+    create_species_table_q = f"""
+    CREATE TABLE IF NOT EXISTS {SPECIES_TABLE} (
         species_code            text primary key,
         common_name             text,
         scientific_name         text,
@@ -286,8 +290,8 @@ def create_and_fill_species_table():
         conn.execute(create_species_table_q)
         conn.commit()
         with conn.cursor() as cur:
-            cur.executemany("""
-                        INSERT INTO species (
+            cur.executemany(f"""
+                        INSERT INTO {SPECIES_TABLE} (
                         species_code,
                         common_name,
                         scientific_name,
@@ -319,18 +323,18 @@ def create_and_fill_species_table():
             """,
             species_json)
             cur.connection.commit()
-    vacuum('species')
+    vacuum(SPECIES_TABLE)
 
 
 def make_species_code_map() -> dict[str, str]:
     with open_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT scientific_name, species_code FROM species")
+            cur.execute(f"SELECT scientific_name, species_code FROM {SPECIES_TABLE}")
             return {row[0]: row[1] for row in cur.fetchall()}
 
 def create_observations_table():
-    create_sightings_table = """
-    CREATE TABLE IF NOT EXISTS observations (
+    create_observations_table = f"""
+    CREATE TABLE IF NOT EXISTS {OBSERVATIONS_TABLE} (
         global_unique_identifier    text primary key,
         sampling_event_id           text references checklists(sampling_event_id),
         species_code                text references species(species_code),
@@ -350,32 +354,28 @@ def create_observations_table():
     """
     with open_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(create_sightings_table)
+            cur.execute(create_observations_table)
             conn.commit()
-
-
 
 def copy_observations_to_observations_table(
         conn: psycopg.Connection,
-        tar_member_reader: TarMemberReader,
+        reader: ArchiveMemberReader,
         species_code_map: dict[str,str],
         start_date: datetime|None=None,
         end_date: datetime|None=None
     ) -> None:
-    if (tar_member_reader.member_file is None):
-        raise ValueError("No member file found in tar member reader")
-    copy_cmd = f"COPY observations (global_unique_identifier, sampling_event_id, species_code, sub_species_code, exotic_code, observation_count, breeding_code, breeding_category, behavior_code, age_sex_code, species_comments, has_media, approved, reviewed, reason) FROM STDIN"
+    copy_cmd = f"COPY {OBSERVATIONS_TABLE} (global_unique_identifier, sampling_event_id, species_code, sub_species_code, exotic_code, observation_count, breeding_code, breeding_category, behavior_code, age_sex_code, species_comments, has_media, approved, reviewed, reason) FROM STDIN"
     with conn.cursor() as cur:
         with cur.copy(copy_cmd) as copy:
-            pprint.pp(f"Copying observations from {tar_member_reader.member_info.name} to observations table.")
-            pprint.pp(f"Total size is {tar_member_reader.member_info.size} bytes.")
-            bytes_pbar = tqdm(desc='bytes read', unit='B', total=tar_member_reader.member_info.size, unit_scale=True)
+            pprint.pp(f"Copying observations from {reader.file_name} to observations table.")
+            pprint.pp(f"Effective size is {reader.file_size} bytes.")
+            bytes_pbar = tqdm(desc='bytes read', unit='B', total=reader.file_size, unit_scale=True)
             num_added: int = 0;
             added_pbar = tqdm(desc='observations added')
             num_skipped: int = 0;
             skipped_pbar = tqdm(desc='observations skipped')
-            for line in tqdm(tar_member_reader.lines(), desc='lines read'):
-                bytes_pbar.update(tar_member_reader.last_bytes_read)
+            for line in tqdm(reader.lines(), desc='lines read'):
+                bytes_pbar.update(reader.last_bytes_read)
                 if ((start_date or end_date) and line['OBSERVATION DATE']):
                     obs_date = datetime.strptime(line['OBSERVATION DATE'], '%Y-%m-%d')
                     if start_date and obs_date < start_date:
@@ -393,7 +393,7 @@ def copy_observations_to_observations_table(
                 line['species_code'] = species_code_map[line['SCIENTIFIC NAME']]
                 line['sub_species_code'] = species_code_map.get(line['SUBSPECIES SCIENTIFIC NAME'], None)
                 if line['OBSERVATION COUNT'] == 'X':
-                    line['OBSERVATION COUNT'] = '-1'
+                    line['OBSERVATION COUNT'] = None
                 copy.write_row((
                     line['GLOBAL UNIQUE IDENTIFIER'],
                     line['SAMPLING EVENT IDENTIFIER'],
@@ -421,14 +421,11 @@ def create_and_fill_observations_table(ebird_file: str, start_date: datetime|Non
     species_code_map = make_species_code_map()
     # Create the table
     create_observations_table()
-    # Read from the tar file...
-    suffix = f'{ebird_file.split('-')[-1].split('.')[0]}.txt.gz'
-    with tarfile.open(ebird_file, "r") as tar:
-        tar_member_reader = TarMemberReader(tar, suffix)
+    with get_observations_file_archive_member_reader(ebird_file) as reader:
         with open_connection() as conn:
-            copy_observations_to_observations_table(conn, tar_member_reader, species_code_map, start_date, end_date)
+            copy_observations_to_observations_table(conn, reader, species_code_map, start_date, end_date)
     # Clean up after inserting so many rows.
-    vacuum('observations')
+    vacuum(OBSERVATIONS_TABLE)
 
 
 def main():
