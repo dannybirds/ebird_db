@@ -8,9 +8,9 @@ import argparse
 from tqdm import tqdm
 import pprint
 
-from archive_readers import ArchiveMemberReader, get_archive_member_reader, get_observations_file_archive_member_reader, get_sampling_file_archive_member_reader
+from archive_readers import ArchiveMemberReader, get_observations_file_archive_member_reader, get_sampling_file_archive_member_reader
 
-DB_NAME = "ebird"
+DB_NAME = "ebird_us"
 TMP_SAMPLING_TABLE = "tmp_sampling_table"
 LOCALITIES_TABLE = "localities"
 CHECKLISTS_TABLE = "checklists"
@@ -362,7 +362,8 @@ def copy_observations_to_observations_table(
         reader: ArchiveMemberReader,
         species_code_map: dict[str,str],
         start_date: datetime|None=None,
-        end_date: datetime|None=None
+        end_date: datetime|None=None,
+        state_code: str|None=None
     ) -> None:
     copy_cmd = f"COPY {OBSERVATIONS_TABLE} (global_unique_identifier, sampling_event_id, species_code, sub_species_code, exotic_code, observation_count, breeding_code, breeding_category, behavior_code, age_sex_code, species_comments, has_media, approved, reviewed, reason) FROM STDIN"
     with conn.cursor() as cur:
@@ -376,6 +377,10 @@ def copy_observations_to_observations_table(
             skipped_pbar = tqdm(desc='observations skipped')
             for line in tqdm(reader.lines(), desc='lines read'):
                 bytes_pbar.update(reader.last_bytes_read)
+                if(state_code and line['STATE CODE'] != state_code):
+                    num_skipped += 1
+                    skipped_pbar.update(1)
+                    continue
                 if ((start_date or end_date) and line['OBSERVATION DATE']):
                     obs_date = datetime.strptime(line['OBSERVATION DATE'], '%Y-%m-%d')
                     if start_date and obs_date < start_date:
@@ -416,14 +421,14 @@ def copy_observations_to_observations_table(
         conn.commit()
     pprint.pp(f"Wrote {num_added} observations to observations table, skipped {num_skipped}.")
 
-def create_and_fill_observations_table(ebird_file: str, start_date: datetime|None=None, end_date: datetime|None=None):
+def create_and_fill_observations_table(ebird_file: str, start_date: datetime|None=None, end_date: datetime|None=None, state_code: str|None=None):
     # Make a map from scientific name to species code.
     species_code_map = make_species_code_map()
     # Create the table
     create_observations_table()
     with get_observations_file_archive_member_reader(ebird_file) as reader:
         with open_connection() as conn:
-            copy_observations_to_observations_table(conn, reader, species_code_map, start_date, end_date)
+            copy_observations_to_observations_table(conn, reader, species_code_map, start_date, end_date, state_code)
     # Clean up after inserting so many rows.
     vacuum(OBSERVATIONS_TABLE)
 
@@ -435,12 +440,13 @@ def main():
                         type=str,
                         help="Which stage of the process to run",
                         choices=["copy_sampling", "localities", "checklists", "drop_sampling", "species", "observations"])
-    parser.add_argument("--start_date",
+    parser.add_argument("--obs_start_date",
                         type=lambda s: datetime.strptime(s, '%Y-%m-%d'),
-                        help="Only data after this date will be processed (format: YYYY-MM-DD)")
-    parser.add_argument("--end_date",
+                        help="Only observations after this date will be processed (format: YYYY-MM-DD)")
+    parser.add_argument("--obs_end_date",
                         type=lambda s: datetime.strptime(s, '%Y-%m-%d'),
-                        help="Only data before this date will be processed (format: YYYY-MM-DD)")
+                        help="Only observations before this date will be processed (format: YYYY-MM-DD)")
+    parser.add_argument("--obs_state_code", action="store_true", help="Only observations with this state code will be processed")
     args = parser.parse_args()
 
     # Read in raw sampling data.
@@ -464,7 +470,7 @@ def main():
 
     # Make the big table of all the observations.
     if (args.stage == "observations"):
-        create_and_fill_observations_table(args.ebird_file, args.start_date, args.end_date)
+        create_and_fill_observations_table(args.ebird_file, args.obs_start_date, args.obs_end_date, args.obs_state_code)
 
 if __name__ == "__main__":
     main()
