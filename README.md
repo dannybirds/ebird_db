@@ -1,10 +1,10 @@
 # ebird_db
 
-`ebird_db` is a script that reads data from an eBird TAR file into a postgres database.
+`ebird_db` is a script that reads data from an eBird tar or zip file into a postgres database.
 
-It's very far turnkey, but with some babysitting (and maybe commenting/un-commenting of code) you'll get it to work. You got this.
+For large files, it's very far from turnkey, but with some babysitting (and maybe commenting/un-commenting of code) you'll get it to work. You got this.
 
-The TAR file must contain the sampling (checklist metadata) file in addition to the observations file.
+The archive file must contain the sampling (checklist metadata) file in addition to the observations file.
 
 ## Setting things up
 
@@ -33,11 +33,10 @@ $ export EBIRD_API_KEY=your_api_key
 The script works in a few stages. Each stage has a `stage` command line argument that will cause it to run. You'll want to run them in this order! And you'll probably re-run them (maybe dropping a table in between) a few times.
 1. `copy_sampling`: Copies all data from the sampling file into a `tmp_sampling_data` table.
 2. `localities`: Makes a `localities` table and populates it with hotspot info from `tmp_sampling_data`.
-3. `checklists`: Makes a `checklists` table and populates it with hotspot info from `tmp_sampling_data`.
+3. `checklists`: Makes a `checklists` table with one row per checklist in `tmp_sampling_data`. Hotspot info is not copied, instead it contains the `locality_id` as a foreign key to the `localities` table.
 4. `drop_sampling`: Drops the `tmp_sampling_table`. Optional if you want to save space.
 6. `species`: Makes a `species` table with info about all species in the eBird taxonomy. Uses the eBird API.
-7. `observations`: Still in progress!
-
+7. `observations`: Makes an `observations` table with one row per observation. Species linked to the `species` table via `species_code`, and checklists to the `checklists` table via `sampling_event_id`.
 
 ## Example Queries
 
