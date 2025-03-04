@@ -6,7 +6,7 @@ import logging
 
 import psycopg
 
-from db import (
+from . import (
     LOCALITIES_TABLE, 
     CHECKLISTS_TABLE, 
     SPECIES_TABLE, 

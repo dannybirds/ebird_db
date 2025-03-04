@@ -7,7 +7,7 @@ import psycopg
 from psycopg.types.string import StrDumper
 from typing import LiteralString
 
-from db import DB_NAME
+from . import DB_NAME
 
 logger = logging.getLogger('ebird_db')
 

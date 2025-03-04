@@ -2,16 +2,16 @@ import argparse
 import sys
 from datetime import datetime
 
-from utils.logging import setup_logging
-from utils.progress import ImportStats, stage_context
-from db.importers import (
+from .utils.logging import setup_logging
+from .utils.progress import ImportStats, stage_context
+from .db.importers import (
     make_temp_sampling_table,
     create_and_fill_locality_table,
     create_and_fill_checklist_table,
     create_and_fill_species_table,
     create_and_fill_observations_table
 )
-from db.connection import open_connection
+from .db.connection import open_connection
 
 def run_all_stages(stats: ImportStats, ebird_file: str, start_date: datetime | None = None, end_date: datetime | None = None, state_code: str | None = None):
     """Run all import stages with statistics tracking."""
@@ -43,7 +43,7 @@ def run_all_stages(stats: ImportStats, ebird_file: str, start_date: datetime | N
 
 def interactive_mode():
     """Run the script in interactive mode."""
-    from cli import interactive_setup
+    from .cli import interactive_setup
     interactive_setup()
 
 def main():

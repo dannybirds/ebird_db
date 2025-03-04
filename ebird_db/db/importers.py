@@ -4,34 +4,30 @@ Data import functions for ebird_db.
 from functools import lru_cache
 import os
 import json
-import utils.logging as ul
+from ebird_db.utils import logging as ul
 import urllib.request
 from datetime import datetime
 
 import psycopg
 from tqdm import tqdm
 
-from db import (
+from . import (
     TMP_SAMPLING_TABLE,
     LOCALITIES_TABLE,
     CHECKLISTS_TABLE,
     SPECIES_TABLE,
     OBSERVATIONS_TABLE
 )
-from db.connection import open_connection, vacuum
-from db.schema import (
+from .connection import open_connection, vacuum
+from .schema import (
     locality_columns,
     checklist_columns
 )
-from archive_readers import (
-    ArchiveMemberReader,
-    get_sampling_file_archive_member_reader,
-    get_observations_file_archive_member_reader
-)
+from .. import archive_readers as ar
 
 logger = ul.setup_logging()
 
-def copy_sampling_file_to_temp_table(conn: psycopg.Connection, reader: ArchiveMemberReader) -> None:
+def copy_sampling_file_to_temp_table(conn: psycopg.Connection, reader: ar.ArchiveMemberReader) -> None:
     """
     Copy data from a sampling file to a temporary table.
     
@@ -132,7 +128,7 @@ def make_temp_sampling_table(ebird_file: str):
     logger.info(f"Creating temporary sampling table from {ebird_file}")
     
     with open_connection() as conn:
-        with get_sampling_file_archive_member_reader(ebird_file) as reader:
+        with ar.get_sampling_file_archive_member_reader(ebird_file) as reader:
             copy_sampling_file_to_temp_table(conn, reader)
             
     # Clean up after inserting
@@ -382,7 +378,7 @@ def create_observations_table():
 
 def copy_observations_to_observations_table(
         conn: psycopg.Connection,
-        reader: ArchiveMemberReader,
+        reader: ar.ArchiveMemberReader,
         species_code_map: dict[str, str],
         start_date: datetime|None = None,
         end_date: datetime|None = None,
@@ -510,7 +506,7 @@ def create_and_fill_observations_table(
     create_observations_table()
     
     # Import data
-    with get_observations_file_archive_member_reader(ebird_file) as reader:
+    with ar.get_observations_file_archive_member_reader(ebird_file) as reader:
         with open_connection() as conn:
             copy_observations_to_observations_table(conn, reader, species_code_map, start_date, end_date, state_code)
             

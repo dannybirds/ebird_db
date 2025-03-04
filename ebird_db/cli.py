@@ -5,9 +5,9 @@ import os
 import getpass
 from datetime import datetime
 
-from utils.logging import setup_logging
-from utils.progress import ImportStats, stage_context
-from db.connection import open_connection
+from .utils.logging import setup_logging
+from .utils.progress import ImportStats, stage_context
+from .db.connection import open_connection
 
 def interactive_setup():
     """Run an interactive setup to guide users through the process."""
@@ -58,7 +58,7 @@ def interactive_setup():
     print("\n--- Running eBird data import ---")
     try:
         # Dynamically import to avoid circular imports
-        from db.importers import (
+        from .db.importers import (
             make_temp_sampling_table,
             create_and_fill_locality_table,
             create_and_fill_checklist_table,
