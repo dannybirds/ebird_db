@@ -6,7 +6,7 @@ defining the schema, and importing data.
 """
 
 # Define constants for table names that will be used throughout the package
-DB_NAME = "ebird_us"
+DB_NAME = "ebird_testing"
 TMP_SAMPLING_TABLE = "tmp_sampling_table"
 LOCALITIES_TABLE = "localities"
 CHECKLISTS_TABLE = "checklists"

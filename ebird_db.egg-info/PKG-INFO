@@ -1,3 +1,26 @@
+Metadata-Version: 2.2
+Name: ebird_db
+Version: 0.1.0
+Summary: Import eBird data into PostgreSQL
+Home-page: https://github.com/dannybirds/ebird_db
+Author: Your Name
+Author-email: dannywyatt@gmail.com
+Classifier: Programming Language :: Python :: 3
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.7
+Description-Content-Type: text/markdown
+Requires-Dist: psycopg>=3.0.0
+Requires-Dist: tqdm>=4.0.0
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
+
 # eBird DB
 
 `ebird_db` is a Python package that imports data from eBird archive files (tar or zip) into a PostgreSQL database for analysis and querying.
@@ -42,6 +65,8 @@ your_postgres_username=# CREATE DATABASE ebird;
 
 ## Configuration
 
+You can configure `ebird_db` in several ways:
+
 ### Environment variables
 
 ```bash
@@ -50,10 +75,24 @@ export POSTGRES_PWD=your_postgres_password
 export EBIRD_API_KEY=your_ebird_api_key
 ```
 
+### Configuration file
+
+Create a file at `~/.ebird_db/config.ini`:
+
+```ini
+[database]
+name = ebird_us
+user = your_postgres_username
+password = your_postgres_password
+
+[api]
+ebird_key = your_ebird_api_key
+```
+
 ### Command-line options
 
 ```bash
-ebird-db --ebird_file data.tar
+ebird-db --config path/to/config.ini --ebird_file data.tar
 ```
 
 ## Usage
@@ -78,7 +117,7 @@ ebird-db --ebird_file path/to/ebird_data.tar --stage full
 # Import only the sampling data
 ebird-db --ebird_file path/to/ebird_data.tar --stage copy_sampling
 
-# Just create the species table
+# Create the species table
 ebird-db --stage species
 ```
 
@@ -87,4 +126,4 @@ ebird-db --stage species
 ```bash
 # Import only data from 2020-2022
 ebird-db --ebird_file path/to/ebird_data.tar --stage full \
-  --obs_start_date 2020-01-01 --obs_end_date 2022-12-31
+  --obs_start_date 2020-01-
