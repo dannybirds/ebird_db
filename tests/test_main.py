@@ -4,7 +4,7 @@ import io
 import unittest
 from archive_readers import TarMemberReader
 from unittest.mock import patch, MagicMock
-from main import make_species_code_map
+from db.importers import make_species_code_map
 
 class TestMain(unittest.TestCase):
     
@@ -101,7 +101,7 @@ class TestMain(unittest.TestCase):
         test_tar.close()
 
 
-    @patch('main.open_connection')
+    @patch('db.importers.open_connection')
     def test_make_species_code_map(self, mock_open_connection: MagicMock):
         # Mock the db connection and cursor
         mock_conn = MagicMock()
