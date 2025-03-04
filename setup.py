@@ -6,7 +6,7 @@ with open("README.md", "r") as fh:
 setup(
     name="ebird_db",
     version="0.1.0",
-    author="Your Name",
+    author="Danny Wyatt",
     author_email="dannywyatt@gmail.com",
     description="Import eBird data into PostgreSQL",
     long_description=long_description,

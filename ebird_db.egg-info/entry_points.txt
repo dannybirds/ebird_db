@@ -1,2 +1,0 @@
-[console_scripts]
-ebird-db = ebird_db.main:main

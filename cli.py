@@ -20,7 +20,7 @@ def interactive_setup():
     
     # Database configuration
     print("\n--- Database Configuration ---")
-    db_name = input("Database name [ebird_us]: ").strip() or "ebird_us"
+    db_name = input("Database name [ebird]: ").strip() or "ebird"
     db_user = input("PostgreSQL username: ").strip()
     db_pwd = getpass.getpass("PostgreSQL password: ")
     
@@ -49,28 +49,7 @@ def interactive_setup():
     except ValueError as e:
         print(f"Error parsing date: {e}")
         print("Using no date filter instead.")
-    
-    # Save configuration?
-    save_config = input("\nSave configuration to file? (y/n): ").lower().startswith('y')
-    if save_config:
-        config_dir = Path.home() / '.ebird_db'
-        config_dir.mkdir(exist_ok=True, parents=True)
-        config_path = config_dir / 'config.ini'
         
-        cfg = configparser.ConfigParser()
-        cfg['database'] = {
-            'name': db_name,
-            'user': db_user,
-            'password': db_pwd
-        }
-        cfg['api'] = {
-            'ebird_key': api_key
-        }
-        
-        with open(config_path, 'w') as f:
-            cfg.write(f)
-        print(f"Configuration saved to {config_path}")
-    
     # Set environment variables for this session
     os.environ['POSTGRES_USER'] = db_user
     os.environ['POSTGRES_PWD'] = db_pwd
