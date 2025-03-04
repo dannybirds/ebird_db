@@ -3,9 +3,7 @@ Command-line interface for ebird_db package.
 """
 import os
 import getpass
-import configparser
 from datetime import datetime
-from pathlib import Path
 
 from utils.logging import setup_logging
 from utils.progress import ImportStats, stage_context
@@ -54,6 +52,7 @@ def interactive_setup():
     os.environ['POSTGRES_USER'] = db_user
     os.environ['POSTGRES_PWD'] = db_pwd
     os.environ['EBIRD_API_KEY'] = api_key
+    os.environ['DB_NAME'] = db_name
     
     # Run the import
     print("\n--- Running eBird data import ---")

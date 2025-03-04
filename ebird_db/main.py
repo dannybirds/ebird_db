@@ -2,7 +2,6 @@ import argparse
 import sys
 from datetime import datetime
 
-# Import modules (assuming new package structure)
 from utils.logging import setup_logging
 from utils.progress import ImportStats, stage_context
 from db.importers import (

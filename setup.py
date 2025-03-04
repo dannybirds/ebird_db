@@ -13,8 +13,10 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/dannybirds/ebird_db",
     packages=find_packages(),
+    #py_modules=["main", "cli", "archive_readers"],
     classifiers=[
         "Programming Language :: Python :: 3",
+        "License :: None",
         "Operating System :: OS Independent",
     ],
     python_requires=">=3.7",
@@ -28,3 +30,6 @@ setup(
         ],
     },
 )
+print("=========================")
+print(find_packages())
+print("=========================")
